@@ -21,9 +21,15 @@ def load_documents(pdf_paths: list[str]) -> str:
     all_metadatas: list[dict] = []
     all_ids: list[str] = []
 
-    for path in pdf_paths:
+    for doc_index, path in enumerate(pdf_paths):
         if not path.lower().endswith(".pdf"):
             raise ValueError(f"PDF 파일만 지원합니다: {path}")
+
+        p = Path(path)
+        if not p.exists():
+            raise ValueError(f"파일을 찾을 수 없습니다: {path}")
+        if not p.is_file():
+            raise ValueError(f"경로가 파일이 아닙니다: {path}")
 
         try:
             reader = PdfReader(path)
@@ -44,7 +50,7 @@ def load_documents(pdf_paths: list[str]) -> str:
         for i, chunk in enumerate(chunks):
             all_chunks.append(chunk)
             all_metadatas.append({"source": filename, "chunk_index": i})
-            all_ids.append(f"{collection_name}_{filename}_chunk_{i}")
+            all_ids.append(f"{collection_name}_doc{doc_index}_{filename}_chunk_{i}")
 
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))
     collection = client.create_collection(collection_name)
