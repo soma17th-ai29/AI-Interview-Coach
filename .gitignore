@@ -190,6 +190,7 @@ Thumbs.db
 # Chroma DB
 chroma_db/
 *.db
+_test_chroma/
 
 # Local History for Visual Studio Code
 .history/

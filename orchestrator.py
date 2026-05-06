@@ -1,5 +1,6 @@
 from core.answer_evaluator import evaluate_answer
 from core.document_loader import load_documents
+from core.job_classifier import infer_job_family
 from core.question_generator import generate_question
 from core.report_generator import generate_report
 from core.tavily_search import search_company
@@ -25,10 +26,14 @@ def start_session(
         if company_profile is not None and company_culture:
             company_profile.culture = company_culture
 
+    # JD 기반 직무 분류 (키워드 우선 + 모호하면 LLM 폴백, 실패해도 general)
+    job_family = infer_job_family(job_description)
+
     context = SessionContext(
         chroma_collection_name=collection_name,
         company_profile=company_profile,
         job_description=job_description,
+        job_family=job_family,
     )
     return SessionState(context=context)
 
