@@ -17,7 +17,10 @@ def start_session(
 
     company_profile = None
     if company_name:
-        company_profile = search_company(company_name)
+        try:
+            company_profile = search_company(company_name)
+        except Exception:
+            company_profile = None
 
     context = SessionContext(
         chroma_collection_name=collection_name,
