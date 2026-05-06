@@ -202,4 +202,12 @@ chroma_db/
 .history
 .ionide
 
+# Cache
+cache/
+
+# temporaray docs
+docs/plandocs.md
+docs/checklist.md
+docs/test/
+.claude
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
