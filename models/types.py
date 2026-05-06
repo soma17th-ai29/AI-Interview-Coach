@@ -3,7 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-Category = Literal["CS", "프로젝트", "문제해결", "인성", "적합성"]
+# ─────────────────────────────────────────────
+# 직무 카테고리
+# ─────────────────────────────────────────────
+JobFamily = Literal[
+    "engineering",   # 백엔드, 프론트엔드, 데이터, ML, DevOps, 모바일, QA
+    "design",        # UX, UI, BX, 그래픽, 프로덕트 디자이너
+    "product",       # PM, PO, 기획, 서비스 기획, 전략
+    "marketing",     # 퍼포먼스, 콘텐츠, 브랜드, 그로스
+    "sales_bd",      # 영업, BD, AE, CSM, 사업개발
+    "operations",    # 운영, CS, 백오피스, 물류
+    "hr_people",     # HR, 리쿠르터, People, L&D
+    "finance",       # 재무, 회계, FP&A, 세무
+    "general",       # 분류 불가시 폴백
+]
+
+# ─────────────────────────────────────────────
+# 질문 카테고리 — 직무 무관 일반 카테고리로 통일
+# (직무별 세부 카테고리는 question_generator.py 의 CATEGORIES_BY_FAMILY 에서 분기)
+# ─────────────────────────────────────────────
+Category = Literal["역량", "경험", "문제해결", "협업", "적합성"]
 
 
 @dataclass
@@ -20,6 +39,7 @@ class SessionContext:
     chroma_collection_name: str
     company_profile: CompanyProfile | None  # Tavily 실패 시 None
     job_description: str
+    job_family: JobFamily = "general"       # JD 기반 추론. 분류 실패 시 general.
 
 
 @dataclass
