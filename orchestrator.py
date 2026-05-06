@@ -12,6 +12,7 @@ def start_session(
     pdf_paths: list[str],
     job_description: str,
     company_name: str,
+    company_culture: str = "",
 ) -> SessionState:
     collection_name = load_documents(pdf_paths)
 
@@ -21,6 +22,8 @@ def start_session(
             company_profile = search_company(company_name)
         except Exception:
             company_profile = None
+        if company_profile is not None and company_culture:
+            company_profile.culture = company_culture
 
     context = SessionContext(
         chroma_collection_name=collection_name,
@@ -41,7 +44,7 @@ def process_answer(
         {"action": "followup", "question": Question}      — 꼬리질문 생성
         {"action": "next_question", "question": Question} — 다음 메인 질문
         {"action": "can_report", "question": Question}    — 리포트 가능, 계속 여부 선택
-        {"action": "force_end"}                           — 강제 종료
+        {"action": "force_end", "report": Report}        — 강제 종료 + 리포트
     """
     if len(answer.strip()) < MIN_ANSWER_LENGTH:
         return {"action": "retry"}
@@ -49,6 +52,11 @@ def process_answer(
     result = evaluate_answer(question, answer, state.context)
     state.history.append((question, result))
     state.question_count += 1
+
+    if state.question_count >= state.max_questions:
+        state.is_active = False
+        report = generate_report(state.history)
+        return {"action": "force_end", "report": report}
 
     can_followup = (
         bool(result.weakness_tags)
@@ -62,10 +70,6 @@ def process_answer(
 
     state.bundle_count += 1
     state.current_followup_depth = 0
-
-    if state.question_count >= state.max_questions:
-        state.is_active = False
-        return {"action": "force_end"}
 
     next_q = generate_question(state, is_followup=False)
 
