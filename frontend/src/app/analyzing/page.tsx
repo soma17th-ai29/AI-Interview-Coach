@@ -2,116 +2,131 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Check, Loader2 } from "lucide-react";
+import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
-import { cn } from "@/lib/utils";
-
-// 백엔드 통합 전: 가짜 progressing simulation.
-// TODO(통합 시 필수): 반드시 polling 으로 실제 작업 진행 상황을 사용자가 확인할 수 있게 한다.
-//   예) GET /session/{id}/progress 를 1~2초 주기로 polling
-//       응답: { stage: "indexing" | "company" | "job_classify" | "ready", status }
-//   가짜 setTimeout 을 polling 결과로 갱신하는 currentIdx 로 교체.
-const STEPS = [
-  { id: "indexing", label: "자소서·이력서 인덱싱", duration: 1800 },
-  { id: "company", label: "회사 정보 수집", duration: 2200 },
-  { id: "job", label: "직무 분류", duration: 1500 },
-];
-
-const READY_DELAY_MS = 1200;
+import { Button } from "@/components/ui/button";
+import { pollJob, type StartSessionResult } from "@/lib/api";
 
 export default function AnalyzingPage() {
   const router = useRouter();
-  const [currentIdx, setCurrentIdx] = React.useState(0);
+  const [progress, setProgress] = React.useState(0);
+  const [step, setStep] = React.useState<string>("queued");
+  const [message, setMessage] = React.useState<string>(
+    "작업을 큐에 등록하는 중입니다.",
+  );
+  const [error, setError] = React.useState<string | null>(null);
+  const [done, setDone] = React.useState(false);
 
-  // 단계 진행
   React.useEffect(() => {
-    if (currentIdx >= STEPS.length) return;
-    const id = setTimeout(() => {
-      setCurrentIdx((i) => i + 1);
-    }, STEPS[currentIdx].duration);
-    return () => clearTimeout(id);
-  }, [currentIdx]);
+    const jobId = sessionStorage.getItem("interview.start_job_id");
+    if (!jobId) {
+      router.replace("/upload");
+      return;
+    }
+    const ctrl = new AbortController();
 
-  // 모든 단계 완료 시 면접 화면으로
-  React.useEffect(() => {
-    if (currentIdx < STEPS.length) return;
-    const id = setTimeout(() => router.push("/interview"), READY_DELAY_MS);
-    return () => clearTimeout(id);
-  }, [currentIdx, router]);
+    const run = async () => {
+      try {
+        const result = await pollJob<StartSessionResult>(jobId, {
+          intervalMs: 1500,
+          signal: ctrl.signal,
+          onProgress: (job) => {
+            setProgress(job.progress);
+            setStep(job.step);
+            setMessage(job.message);
+          },
+        });
+        // 세션 ID 저장 + 면접 화면으로
+        sessionStorage.setItem(
+          "interview.session_id",
+          result.session.session_id,
+        );
+        sessionStorage.removeItem("interview.start_job_id");
+        setDone(true);
+        setTimeout(() => router.push("/interview"), 800);
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        setError((e as Error).message);
+      }
+    };
+    void run();
 
-  const allDone = currentIdx >= STEPS.length;
+    return () => ctrl.abort();
+  }, [router]);
 
   return (
     <div className="mx-auto flex w-full max-w-md flex-col gap-10 px-4 py-24 sm:py-32">
       <div className="flex flex-col items-center gap-3 text-center">
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-          {allDone ? "면접 준비 완료." : "자료를 분석하고 있어요."}
+          {error
+            ? "분석 중 문제가 발생했어요."
+            : done
+              ? "면접 준비 완료."
+              : "자료를 분석하고 있어요."}
         </h1>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          {allDone
-            ? "잠시 후 첫 질문이 시작됩니다."
-            : "회사·직무에 맞춘 질문을 만들기 위해 자료를 정리하는 중입니다."}
+          {error
+            ? "잠시 후 다시 시도해 주세요."
+            : done
+              ? "잠시 후 첫 질문이 시작됩니다."
+              : "회사·직무에 맞춘 질문을 만들기 위해 자료를 정리하는 중입니다."}
         </p>
       </div>
 
-      <ol className="flex flex-col gap-3">
-        {STEPS.map((step, i) => {
-          const status =
-            i < currentIdx ? "done" : i === currentIdx ? "active" : "pending";
-          return (
-            <motion.li
-              key={step.id}
-              animate={{ opacity: status === "pending" ? 0.45 : 1 }}
-              transition={{ duration: 0.3 }}
-              className="flex items-center gap-4"
-            >
-              <span
-                className={cn(
-                  "flex size-8 shrink-0 items-center justify-center rounded-full border transition-colors",
-                  status === "done" &&
-                    "border-primary bg-primary text-primary-foreground",
-                  status === "active" &&
-                    "border-accent bg-accent/10 text-accent",
-                  status === "pending" &&
-                    "border-border bg-muted/40 text-muted-foreground",
-                )}
-              >
-                {status === "done" ? (
-                  <Check className="size-4" strokeWidth={3} />
-                ) : status === "active" ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <span className="font-mono text-xs">{i + 1}</span>
-                )}
-              </span>
-              <p
-                className={cn(
-                  "text-sm",
-                  status === "active" && "font-medium text-foreground",
-                  status === "pending" && "text-muted-foreground",
-                )}
-              >
-                {step.label}
-              </p>
-            </motion.li>
-          );
-        })}
-      </ol>
-
-      <AnimatePresence>
-        {allDone && (
+      {/* Progress bar */}
+      <div className="flex flex-col gap-3">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
           <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-            className="flex items-center justify-center gap-2 text-sm text-muted-foreground"
-          >
-            <Check className="size-4 text-primary" strokeWidth={3} />
-            <span>모든 준비가 끝났습니다.</span>
-          </motion.div>
-        )}
+            initial={{ width: 0 }}
+            animate={{ width: `${progress}%` }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="h-full bg-primary"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="font-mono uppercase tracking-wider text-muted-foreground">
+            {step}
+          </span>
+          <span className="font-mono text-muted-foreground">{progress}%</span>
+        </div>
+      </div>
+
+      {/* Status card */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={`${error ? "err" : done ? "done" : "run"}`}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.3 }}
+          className="flex items-start gap-3 rounded-2xl border border-border/60 bg-card p-5"
+        >
+          {error ? (
+            <AlertCircle className="size-5 shrink-0 text-destructive" />
+          ) : done ? (
+            <Check
+              className="size-5 shrink-0 text-primary"
+              strokeWidth={3}
+            />
+          ) : (
+            <Loader2 className="size-5 shrink-0 animate-spin text-accent" />
+          )}
+          <p className="text-sm leading-relaxed">
+            {error ?? message}
+          </p>
+        </motion.div>
       </AnimatePresence>
+
+      {error && (
+        <Button
+          variant="outline"
+          onClick={() => router.replace("/upload")}
+          className="rounded-full"
+        >
+          처음부터 다시 시작
+        </Button>
+      )}
     </div>
   );
 }

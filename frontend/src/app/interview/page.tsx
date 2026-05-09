@@ -2,95 +2,126 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Send, Sparkles } from "lucide-react";
+import { AlertCircle, Loader2, Send, Sparkles } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-
-type Category = "역량" | "경험" | "문제해결" | "협업" | "적합성";
-type Phase = "asking" | "evaluating" | "generating";
-
-interface Question {
-  id: string;
-  text: string;
-  category: Category;
-  isFollowup: boolean;
-}
-
-// 백엔드 통합 전: mock 질문 시퀀스.
-// TODO(통합): POST /session/{id}/answer 응답으로 다음 question 또는 action 받기.
-//   action: "retry" | "followup" | "next_question" | "can_report" | "force_end"
-//   각 phase 의 가짜 setTimeout 은 실제 LLM 응답 시간으로 자연스럽게 대체된다.
-const MOCK_QUESTIONS: Question[] = [
-  {
-    id: "1",
-    text: "자소서에 적은 프로젝트 중 가장 어려웠던 기술적 결정 하나만 들려주세요.",
-    category: "역량",
-    isFollowup: false,
-  },
-  {
-    id: "1f",
-    text: "왜 다른 대안이 아니라 그 선택이었나요? 결정의 결정적 근거를 좀 더 구체적으로 들려주실 수 있을까요?",
-    category: "역량",
-    isFollowup: true,
-  },
-  {
-    id: "2",
-    text: "협업 중 의견이 갈렸던 경험이 있다면, 어떻게 풀어가셨나요?",
-    category: "협업",
-    isFollowup: false,
-  },
-  {
-    id: "3",
-    text: "최근 프로젝트에서 가장 큰 문제를 발견했을 때, 어떤 순서로 접근했는지 들려주세요.",
-    category: "문제해결",
-    isFollowup: false,
-  },
-];
+import {
+  ApiError,
+  getSession,
+  pollJob,
+  submitAnswer,
+  type ProcessAnswerResult,
+  type Question,
+  type SessionSummary,
+} from "@/lib/api";
 
 const MIN_ANSWER_LENGTH = 50;
-const MIN_BUNDLES_FOR_REPORT = 2;
-const EVAL_DURATION_MS = 1500;
-const GEN_DURATION_MS = 1800;
+type Phase = "loading" | "asking" | "evaluating" | "generating" | "error";
 
 export default function InterviewPage() {
   const router = useRouter();
-  const [currentIdx, setCurrentIdx] = React.useState(0);
+  // sessionId 는 mutable ref 로 — effect body 에서 setState 룰 회피
+  const sidRef = React.useRef<string | null>(null);
+  const [session, setSession] = React.useState<SessionSummary | null>(null);
+  const [question, setQuestion] = React.useState<Question | null>(null);
   const [answer, setAnswer] = React.useState("");
-  const [bundleCount, setBundleCount] = React.useState(0);
-  const [phase, setPhase] = React.useState<Phase>("asking");
+  const [phase, setPhase] = React.useState<Phase>("loading");
+  const [progressMsg, setProgressMsg] = React.useState<string>("");
+  const [error, setError] = React.useState<string | null>(null);
+  const [retryHint, setRetryHint] = React.useState<string | null>(null);
 
-  const question = MOCK_QUESTIONS[currentIdx];
-  const ansLen = answer.trim().length;
-  const canSubmit = ansLen >= MIN_ANSWER_LENGTH && phase === "asking";
-  const canReport = bundleCount >= MIN_BUNDLES_FOR_REPORT;
-  const isLast = currentIdx === MOCK_QUESTIONS.length - 1;
-
-  const onSubmit = async () => {
-    if (!canSubmit) return;
-
-    // 1. 답변 평가 (POST /session/{id}/answer 호출 ~ answer_evaluator 응답 대기)
-    setPhase("evaluating");
-    await new Promise((r) => setTimeout(r, EVAL_DURATION_MS));
-
-    if (isLast) {
-      router.push("/report");
+  // 1. 진입 시 세션 정보 로드
+  React.useEffect(() => {
+    const sid = sessionStorage.getItem("interview.session_id");
+    if (!sid) {
+      router.replace("/upload");
       return;
     }
+    sidRef.current = sid;
+    getSession(sid)
+      .then((s) => {
+        setSession(s);
+        if (!s.current_question) {
+          setError("현재 질문을 받지 못했습니다.");
+          setPhase("error");
+          return;
+        }
+        setQuestion(s.current_question);
+        setPhase("asking");
+      })
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "세션 조회 실패");
+        setPhase("error");
+      });
+  }, [router]);
 
-    // 2. 다음 질문 생성 (question_generator 응답 대기)
-    setPhase("generating");
-    await new Promise((r) => setTimeout(r, GEN_DURATION_MS));
+  const ansLen = answer.trim().length;
+  const canSubmit =
+    phase === "asking" && ansLen >= MIN_ANSWER_LENGTH && !!question;
+  const canReport = session?.can_report === true;
 
-    // 3. 다음 질문 표시
-    const next = MOCK_QUESTIONS[currentIdx + 1];
-    if (!next.isFollowup) {
-      setBundleCount((b) => b + 1);
+  const onSubmit = async () => {
+    const sid = sidRef.current;
+    if (!canSubmit || !sid || !question) return;
+    setRetryHint(null);
+
+    try {
+      // 1) 답변 제출 → job_id 받음
+      setPhase("evaluating");
+      setProgressMsg("답변을 평가하고 있어요");
+      const start = await submitAnswer(sid, question.id, answer);
+
+      // 2) job polling — onProgress 로 message 갱신, generating phase 전환
+      const result = await pollJob<ProcessAnswerResult>(start.job_id, {
+        onProgress: (job) => {
+          // job.step 또는 message 에 따라 phase 결정
+          if (job.message) setProgressMsg(job.message);
+          if (
+            job.step?.includes("generat") ||
+            job.step?.includes("question")
+          ) {
+            setPhase("generating");
+          }
+        },
+      });
+
+      // 3) action 분기
+      switch (result.action) {
+        case "retry":
+          setRetryHint(result.message ?? "답변이 너무 짧습니다.");
+          // 같은 질문 유지
+          if (result.question) setQuestion(result.question);
+          setPhase("asking");
+          break;
+        case "force_end": {
+          // 자동 리포트 — 세션 ID 그대로 두고 report 페이지로
+          if (result.session) setSession(result.session);
+          router.push("/report");
+          return;
+        }
+        case "followup":
+        case "next_question":
+        case "can_report":
+          if (result.session) setSession(result.session);
+          if (result.question) {
+            setQuestion(result.question);
+            setAnswer("");
+          }
+          setPhase("asking");
+          break;
+      }
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? `${e.status}: ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : "알 수 없는 오류";
+      setError(msg);
+      setPhase("error");
     }
-    setCurrentIdx((i) => i + 1);
-    setAnswer("");
-    setPhase("asking");
   };
 
   const buttonLabel =
@@ -98,19 +129,44 @@ export default function InterviewPage() {
       ? "답변 평가 중…"
       : phase === "generating"
         ? "다음 질문 준비 중…"
-        : isLast
-          ? "마무리하고 리포트"
-          : "답변 제출";
+        : "답변 제출";
+
+  if (phase === "loading") {
+    return (
+      <div className="mx-auto flex w-full max-w-md flex-col items-center gap-3 px-4 py-32 text-center">
+        <Loader2 className="size-5 animate-spin text-accent" />
+        <p className="text-sm text-muted-foreground">세션을 불러오는 중…</p>
+      </div>
+    );
+  }
+
+  if (phase === "error") {
+    return (
+      <div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 px-4 py-32 text-center">
+        <AlertCircle className="size-6 text-destructive" />
+        <h1 className="text-xl font-semibold">문제가 발생했어요.</h1>
+        <p className="text-sm text-muted-foreground">{error}</p>
+        <Button
+          variant="outline"
+          onClick={() => router.replace("/upload")}
+          className="rounded-full"
+        >
+          처음부터 다시
+        </Button>
+      </div>
+    );
+  }
+
+  if (!question || !session) return null;
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-4 py-12 sm:px-6 sm:py-16">
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-          묶음 {Math.min(bundleCount + 1, MOCK_QUESTIONS.length)} · 질문{" "}
-          {currentIdx + 1}
+          묶음 {session.bundle_count + 1} · 질문 {session.question_count + 1}
         </p>
-        {canReport && !isLast && phase === "asking" && (
+        {canReport && phase === "asking" && (
           <Button
             variant="outline"
             size="sm"
@@ -122,13 +178,18 @@ export default function InterviewPage() {
         )}
       </div>
 
-      {/* Progress bar */}
+      {/* Progress bar (bundle 기준) */}
       <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
         <motion.div
           className="h-full bg-primary"
           initial={{ width: 0 }}
           animate={{
-            width: `${((currentIdx + 1) / MOCK_QUESTIONS.length) * 100}%`,
+            width: `${Math.min(
+              100,
+              ((session.bundle_count + (canReport ? 0.5 : 0)) /
+                Math.max(session.min_bundles_for_report, 1)) *
+                100,
+            )}%`,
           }}
           transition={{ duration: 0.5, ease: "easeOut" }}
         />
@@ -149,7 +210,7 @@ export default function InterviewPage() {
               <span className="rounded-full border border-accent/30 bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent">
                 {question.category}
               </span>
-              {question.isFollowup && (
+              {question.is_followup && (
                 <span className="rounded-full border border-warning/30 bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning">
                   꼬리질문
                 </span>
@@ -158,6 +219,12 @@ export default function InterviewPage() {
             <p className="text-xl font-medium leading-relaxed sm:text-2xl">
               {question.text}
             </p>
+            {retryHint && (
+              <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+                <AlertCircle className="size-4 shrink-0" />
+                <span>{retryHint}</span>
+              </div>
+            )}
           </motion.div>
         ) : (
           <motion.div
@@ -187,19 +254,18 @@ export default function InterviewPage() {
               </h3>
             </div>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              {phase === "evaluating"
-                ? "STAR 구조 · 구체성 · 직무 관련성 · 일관성 네 축으로 답변을 살펴보고 있습니다."
-                : "답변에서 더 깊이 파고들 지점을 찾아 다음 질문을 만들고 있어요."}
+              {progressMsg ||
+                (phase === "evaluating"
+                  ? "STAR 구조 · 구체성 · 직무 관련성 · 일관성 네 축으로 답변을 살펴보고 있습니다."
+                  : "답변에서 더 깊이 파고들 지점을 찾아 다음 질문을 만들고 있어요.")}
             </p>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Answer form — phase 에 따라 페이드 */}
+      {/* Answer form */}
       <motion.div
-        animate={{
-          opacity: phase === "asking" ? 1 : 0.4,
-        }}
+        animate={{ opacity: phase === "asking" ? 1 : 0.4 }}
         transition={{ duration: 0.3 }}
         className={
           phase !== "asking"

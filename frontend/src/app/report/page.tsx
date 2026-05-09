@@ -1,32 +1,20 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { AlertCircle, ArrowRight, Loader2 } from "lucide-react";
 import { motion } from "motion/react";
 
 import { Button } from "@/components/ui/button";
+import {
+  ApiError,
+  generateReport,
+  pollJob,
+  type GenerateReportResult,
+  type Report,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-// 백엔드 통합 전: 정훈님 report_generator 출력 mock.
-// TODO(통합): GET /session/{id}/report 응답으로 교체.
-//   schema: { overall_score, category_scores, weakness_summary, improvement_suggestions }
-const MOCK_REPORT = {
-  overall_score: 3.42,
-  category_scores: {
-    역량: 4.0,
-    경험: 2.25,
-    문제해결: 3.5,
-    협업: 3.0,
-  } as Record<string, number>,
-  weakness_summary: [
-    "구체성 부족",
-    "수치 인용 부족",
-    "트레이드오프 설명 부족",
-    "직무 관련성 약함",
-  ],
-  improvement_suggestions:
-    "지원자님, 모의 면접 결과 '구체성 부족'이 주요 약점으로 드러났습니다. 특히 '트랜잭션 처리량이 5배 증가했다'처럼 구체적인 수치를 제시해야 합니다. 또한 STAR(상황·과제·행동·결과) 구조에 따라 답변을 보강해보세요. 예를 들어 'Kafka 도입 전후의 처리량 비교 수치를 제시하고, 그 차이가 어떻게 발생했는지 설명'하는 방식으로 답변을 구성해보면 좋습니다. 도메인 키워드를 적절히 활용해 전문성을 드러내는 것도 중요합니다.",
-};
 
 const CATEGORY_ORDER = ["역량", "경험", "문제해결", "협업", "적합성"];
 
@@ -38,21 +26,96 @@ function scoreLabel(score: number): string {
 }
 
 export default function ReportPage() {
-  const {
-    overall_score,
-    category_scores,
-    weakness_summary,
-    improvement_suggestions,
-  } = MOCK_REPORT;
+  const router = useRouter();
+  const [report, setReport] = React.useState<Report | null>(null);
+  const [progress, setProgress] = React.useState(0);
+  const [message, setMessage] = React.useState<string>(
+    "리포트 생성을 시작하는 중입니다.",
+  );
+  const [error, setError] = React.useState<string | null>(null);
 
-  // 정훈님 모듈 그대로: 등장 안 한 카테고리는 제외, CATEGORY_ORDER 순서 보장
+  React.useEffect(() => {
+    const sid = sessionStorage.getItem("interview.session_id");
+    if (!sid) {
+      router.replace("/upload");
+      return;
+    }
+    const ctrl = new AbortController();
+
+    const run = async () => {
+      try {
+        const start = await generateReport(sid, true);
+        const result = await pollJob<GenerateReportResult>(start.job_id, {
+          intervalMs: 1500,
+          signal: ctrl.signal,
+          onProgress: (job) => {
+            setProgress(job.progress);
+            if (job.message) setMessage(job.message);
+          },
+        });
+        setReport(result.report);
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        const msg =
+          e instanceof ApiError
+            ? `${e.status}: ${e.message}`
+            : e instanceof Error
+              ? e.message
+              : "리포트 생성 실패";
+        setError(msg);
+      }
+    };
+    void run();
+    return () => ctrl.abort();
+  }, [router]);
+
+  if (error) {
+    return (
+      <div className="mx-auto flex w-full max-w-md flex-col items-center gap-4 px-4 py-32 text-center">
+        <AlertCircle className="size-6 text-destructive" />
+        <h1 className="text-xl font-semibold">
+          리포트 생성 중 문제가 발생했어요.
+        </h1>
+        <p className="text-sm text-muted-foreground">{error}</p>
+        <Button
+          variant="outline"
+          onClick={() => router.replace("/upload")}
+          className="rounded-full"
+        >
+          처음부터 다시
+        </Button>
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="mx-auto flex w-full max-w-md flex-col gap-8 px-4 py-32">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <Loader2 className="size-5 animate-spin text-accent" />
+          <h1 className="text-2xl font-semibold tracking-tight">
+            리포트를 만들고 있어요.
+          </h1>
+          <p className="text-sm text-muted-foreground">{message}</p>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <motion.div
+            className="h-full bg-primary"
+            initial={{ width: 0 }}
+            animate={{ width: `${progress}%` }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   const orderedCategories = CATEGORY_ORDER.filter(
-    (c) => c in category_scores,
-  ).map((c) => ({ name: c, score: category_scores[c] }));
+    (c) => c in report.category_scores,
+  ).map((c) => ({ name: c, score: report.category_scores[c] }));
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-16 px-4 py-16 sm:px-6 sm:py-20">
-      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
@@ -71,12 +134,11 @@ export default function ReportPage() {
         </p>
       </motion.div>
 
-      <OverallScore score={overall_score} />
+      <OverallScore score={report.overall_score} />
       <CategoryScores categories={orderedCategories} />
-      <WeaknessSummary tags={weakness_summary} />
-      <CoachingCard text={improvement_suggestions} />
+      <WeaknessSummary tags={report.weakness_summary} />
+      <CoachingCard text={report.improvement_suggestions} />
 
-      {/* CTA */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         whileInView={{ opacity: 1, y: 0 }}
@@ -89,7 +151,13 @@ export default function ReportPage() {
           size="lg"
           className="rounded-full px-7 transition-transform hover:scale-105"
         >
-          <Link href="/upload">
+          <Link
+            href="/upload"
+            onClick={() => {
+              sessionStorage.removeItem("interview.session_id");
+              sessionStorage.removeItem("interview.start_job_id");
+            }}
+          >
             새 면접 시작
             <ArrowRight className="ml-1 size-4" />
           </Link>
@@ -109,7 +177,6 @@ export default function ReportPage() {
 
 function OverallScore({ score }: { score: number }) {
   const percentage = Math.min(100, (score / 5) * 100);
-
   return (
     <motion.section
       initial={{ opacity: 0, y: 24 }}
@@ -148,6 +215,7 @@ function CategoryScores({
 }: {
   categories: { name: string; score: number }[];
 }) {
+  if (categories.length === 0) return null;
   return (
     <motion.section
       initial={{ opacity: 0, y: 24 }}
@@ -202,6 +270,7 @@ function CategoryScores({
 }
 
 function WeaknessSummary({ tags }: { tags: string[] }) {
+  if (tags.length === 0) return null;
   return (
     <motion.section
       initial={{ opacity: 0, y: 24 }}
@@ -261,7 +330,7 @@ function CoachingCard({ text }: { text: string }) {
           다음 면접에서 바꿀 행동
         </h2>
       </div>
-      <div className="rounded-2xl border-l-2 border-l-accent border-y border-r border-y-border/60 border-r-border/60 bg-card p-6 sm:p-8">
+      <div className="rounded-2xl border-y border-r border-l-2 border-y-border/60 border-l-accent border-r-border/60 bg-card p-6 sm:p-8">
         <p className="whitespace-pre-line text-sm leading-relaxed sm:text-base">
           {text}
         </p>

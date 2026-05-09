@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { FileDropzone } from "@/components/upload/file-dropzone";
+import { ApiError, startSession } from "@/lib/api";
 
 const MIN_JD_LENGTH = 50;
 
@@ -19,22 +20,41 @@ export default function UploadPage() {
   const [jobDescription, setJobDescription] = React.useState("");
   const [companyName, setCompanyName] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
 
   const jdLen = jobDescription.trim().length;
-  const canSubmit = !!coverLetter && !!resume && jdLen >= MIN_JD_LENGTH;
+  const canSubmit =
+    !!coverLetter && !!resume && jdLen >= MIN_JD_LENGTH && !submitting;
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
     setSubmitting(true);
-    // TODO: 백엔드 머지 후 POST /session/start 로 교체.
-    // 지금은 다음 화면(분석 중)으로 이동만.
-    router.push("/analyzing");
+    setError(null);
+    try {
+      const res = await startSession({
+        files: [coverLetter, resume],
+        jobDescription,
+        companyName: companyName.trim(),
+      });
+      // 분석 중 화면으로 넘어가서 polling
+      sessionStorage.setItem("interview.session_id", res.session_id ?? "");
+      sessionStorage.setItem("interview.start_job_id", res.job_id);
+      router.push("/analyzing");
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? `세션 생성 실패 (${e.status}): ${e.message}`
+          : e instanceof Error
+            ? e.message
+            : "세션 생성 실패";
+      setError(msg);
+      setSubmitting(false);
+    }
   };
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-12 px-4 py-16 sm:px-6 sm:py-20">
-      {/* Title */}
       <div className="flex flex-col gap-3">
         <p className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
           Step 01 · 자료 올리기
@@ -49,7 +69,6 @@ export default function UploadPage() {
       </div>
 
       <form onSubmit={onSubmit} className="flex flex-col gap-8">
-        {/* PDFs */}
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
           <FileDropzone
             label="자소서 PDF"
@@ -65,7 +84,6 @@ export default function UploadPage() {
           />
         </div>
 
-        {/* JD */}
         <div className="flex flex-col gap-2">
           <Label htmlFor="jd">채용공고 텍스트</Label>
           <p className="text-xs text-muted-foreground">
@@ -80,18 +98,11 @@ export default function UploadPage() {
             rows={8}
             className="min-h-[180px] resize-y"
           />
-          <p
-            className={`text-xs ${
-              jdLen >= MIN_JD_LENGTH
-                ? "text-muted-foreground"
-                : "text-muted-foreground"
-            }`}
-          >
+          <p className="text-xs text-muted-foreground">
             {jdLen}자 / 최소 {MIN_JD_LENGTH}자
           </p>
         </div>
 
-        {/* Company */}
         <div className="flex flex-col gap-2">
           <Label htmlFor="company">
             회사명{" "}
@@ -111,22 +122,24 @@ export default function UploadPage() {
           />
         </div>
 
-        {/* Submit */}
         <div className="flex flex-col items-start gap-3">
           <Button
             type="submit"
             size="lg"
-            disabled={!canSubmit || submitting}
+            disabled={!canSubmit}
             className="rounded-full px-7 transition-transform hover:scale-105 disabled:hover:scale-100"
           >
-            {submitting ? "분석 시작 중..." : "분석 시작하기"}
+            {submitting ? "분석 시작 중…" : "분석 시작하기"}
             <ArrowRight className="ml-1 size-4" />
           </Button>
-          {!canSubmit && (
+          {!canSubmit && !submitting && (
             <p className="text-xs text-muted-foreground">
               자소서 PDF · 이력서 PDF · 채용공고 텍스트({MIN_JD_LENGTH}자
               이상)는 필수입니다.
             </p>
+          )}
+          {error && (
+            <p className="text-xs font-medium text-destructive">{error}</p>
           )}
         </div>
       </form>
