@@ -8,7 +8,10 @@ import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
 
 // 백엔드 통합 전: 가짜 progressing simulation.
-// 머지 후엔 실제 stage 이벤트(SSE 또는 polling)에 맞춰 currentIdx 갱신.
+// TODO(통합 시 필수): 반드시 polling 으로 실제 작업 진행 상황을 사용자가 확인할 수 있게 한다.
+//   예) GET /session/{id}/progress 를 1~2초 주기로 polling
+//       응답: { stage: "indexing" | "company" | "job_classify" | "ready", status }
+//   가짜 setTimeout 을 polling 결과로 갱신하는 currentIdx 로 교체.
 const STEPS = [
   { id: "indexing", label: "자소서·이력서 인덱싱", duration: 1800 },
   { id: "company", label: "회사 정보 수집", duration: 2200 },
