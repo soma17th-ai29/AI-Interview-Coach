@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
   ApiError,
   generateReport,
+  getJob,
   pollJob,
   type GenerateReportResult,
   type Report,
@@ -42,17 +43,60 @@ export default function ReportPage() {
     }
     const ctrl = new AbortController();
 
-    const run = async () => {
+    const onProgress = (job: { progress: number; message: string }) => {
+      setProgress(job.progress);
+      if (job.message) setMessage(job.message);
+    };
+
+    /**
+     * 리포트 요청.
+     * - 409 (busy_job_id) 응답이면 busy job 종류에 따라 자동 처리:
+     *   - generate_report 인 경우 그 job 결과를 그대로 사용 (이미 생성됨)
+     *   - 다른 job 이면 끝까지 기다린 뒤 다시 generateReport 시도
+     */
+    const fetchReport = async (): Promise<GenerateReportResult> => {
       try {
         const start = await generateReport(sid, true);
-        const result = await pollJob<GenerateReportResult>(start.job_id, {
+        return await pollJob<GenerateReportResult>(start.job_id, {
           intervalMs: 1500,
           signal: ctrl.signal,
-          onProgress: (job) => {
-            setProgress(job.progress);
-            if (job.message) setMessage(job.message);
-          },
+          onProgress,
         });
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          const detail = e.detail as
+            | { detail?: { busy_job_id?: string } }
+            | undefined;
+          const busyId = detail?.detail?.busy_job_id;
+          if (busyId) {
+            const busy = await getJob(busyId);
+            if (busy.job_type === "generate_report") {
+              return await pollJob<GenerateReportResult>(busyId, {
+                intervalMs: 1500,
+                signal: ctrl.signal,
+                onProgress,
+              });
+            }
+            // 다른 job 끝나길 기다린 뒤 다시 generateReport
+            await pollJob(busyId, {
+              intervalMs: 1500,
+              signal: ctrl.signal,
+            }).catch(() => undefined);
+            const start = await generateReport(sid, true);
+            return await pollJob<GenerateReportResult>(start.job_id, {
+              intervalMs: 1500,
+              signal: ctrl.signal,
+              onProgress,
+            });
+          }
+        }
+        throw e;
+      }
+    };
+
+    const run = async () => {
+      try {
+        const result = await fetchReport();
         setReport(result.report);
       } catch (e) {
         if ((e as Error).name === "AbortError") return;

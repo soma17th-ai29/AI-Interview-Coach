@@ -62,6 +62,23 @@ export default function InterviewPage() {
     phase === "asking" && ansLen >= MIN_ANSWER_LENGTH && !!question;
   const canReport = session?.can_report === true;
 
+  // 평가/생성 phase 동안 경과 시간 — 사용자가 "멈춘 건지" 의심하지 않도록
+  const [elapsedSec, setElapsedSec] = React.useState(0);
+  React.useEffect(() => {
+    const id = setInterval(() => {
+      setElapsedSec((s) =>
+        phase === "evaluating" || phase === "generating" ? s + 1 : 0,
+      );
+    }, 1000);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  const formatElapsed = (s: number) => {
+    const mm = Math.floor(s / 60);
+    const ss = s % 60;
+    return mm > 0 ? `${mm}분 ${ss}초` : `${ss}초`;
+  };
+
   const onSubmit = async () => {
     const sid = sidRef.current;
     if (!canSubmit || !sid || !question) return;
@@ -259,6 +276,16 @@ export default function InterviewPage() {
                   ? "STAR 구조 · 구체성 · 직무 관련성 · 일관성 네 축으로 답변을 살펴보고 있습니다."
                   : "답변에서 더 깊이 파고들 지점을 찾아 다음 질문을 만들고 있어요.")}
             </p>
+            <div className="flex items-center justify-between gap-3 border-t border-border/40 pt-3">
+              <p className="font-mono text-xs text-muted-foreground">
+                경과 {formatElapsed(elapsedSec)}
+              </p>
+              {elapsedSec >= 60 && (
+                <p className="text-xs text-warning">
+                  예상보다 오래 걸리네요. 답변이 길면 평가에 시간이 더 걸릴 수 있어요.
+                </p>
+              )}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
