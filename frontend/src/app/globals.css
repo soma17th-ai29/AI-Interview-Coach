@@ -162,3 +162,24 @@
     @apply font-sans;
   }
 }
+
+/* ─────────────────────────────────────────────
+   배경 패턴 — 그리드 + 가장자리 페이드
+   ───────────────────────────────────────────── */
+@layer utilities {
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, oklch(0 0 0 / 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0 0 0 / 0.06) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+  .dark .bg-grid {
+    background-image:
+      linear-gradient(to right, oklch(1 0 0 / 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(1 0 0 / 0.06) 1px, transparent 1px);
+  }
+  .mask-radial-fade {
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+  }
+}
