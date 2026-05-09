@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 루트 .gitignore 의 Python venv 패턴(lib/)이 frontend/src/lib/ 까지 무시하지 않도록 unignore
+!src/lib/
+!src/lib/**
