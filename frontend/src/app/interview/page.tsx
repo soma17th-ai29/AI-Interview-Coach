@@ -2,13 +2,14 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Send } from "lucide-react";
+import { Loader2, Send, Sparkles } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 type Category = "역량" | "경험" | "문제해결" | "협업" | "적합성";
+type Phase = "asking" | "evaluating" | "generating";
 
 interface Question {
   id: string;
@@ -20,6 +21,7 @@ interface Question {
 // 백엔드 통합 전: mock 질문 시퀀스.
 // TODO(통합): POST /session/{id}/answer 응답으로 다음 question 또는 action 받기.
 //   action: "retry" | "followup" | "next_question" | "can_report" | "force_end"
+//   각 phase 의 가짜 setTimeout 은 실제 LLM 응답 시간으로 자연스럽게 대체된다.
 const MOCK_QUESTIONS: Question[] = [
   {
     id: "1",
@@ -49,41 +51,56 @@ const MOCK_QUESTIONS: Question[] = [
 
 const MIN_ANSWER_LENGTH = 50;
 const MIN_BUNDLES_FOR_REPORT = 2;
+const EVAL_DURATION_MS = 1500;
+const GEN_DURATION_MS = 1800;
 
 export default function InterviewPage() {
   const router = useRouter();
   const [currentIdx, setCurrentIdx] = React.useState(0);
   const [answer, setAnswer] = React.useState("");
   const [bundleCount, setBundleCount] = React.useState(0);
-  const [submitting, setSubmitting] = React.useState(false);
+  const [phase, setPhase] = React.useState<Phase>("asking");
 
   const question = MOCK_QUESTIONS[currentIdx];
   const ansLen = answer.trim().length;
-  const canSubmit = ansLen >= MIN_ANSWER_LENGTH && !submitting;
+  const canSubmit = ansLen >= MIN_ANSWER_LENGTH && phase === "asking";
   const canReport = bundleCount >= MIN_BUNDLES_FOR_REPORT;
   const isLast = currentIdx === MOCK_QUESTIONS.length - 1;
 
   const onSubmit = async () => {
     if (!canSubmit) return;
-    setSubmitting(true);
 
-    // 평가 처리 시뮬 (백엔드: POST /session/{id}/answer)
-    await new Promise((r) => setTimeout(r, 700));
+    // 1. 답변 평가 (POST /session/{id}/answer 호출 ~ answer_evaluator 응답 대기)
+    setPhase("evaluating");
+    await new Promise((r) => setTimeout(r, EVAL_DURATION_MS));
 
     if (isLast) {
       router.push("/report");
       return;
     }
 
-    // 다음이 메인 질문이면 현재 묶음 종료 → bundleCount++
+    // 2. 다음 질문 생성 (question_generator 응답 대기)
+    setPhase("generating");
+    await new Promise((r) => setTimeout(r, GEN_DURATION_MS));
+
+    // 3. 다음 질문 표시
     const next = MOCK_QUESTIONS[currentIdx + 1];
     if (!next.isFollowup) {
       setBundleCount((b) => b + 1);
     }
     setCurrentIdx((i) => i + 1);
     setAnswer("");
-    setSubmitting(false);
+    setPhase("asking");
   };
+
+  const buttonLabel =
+    phase === "evaluating"
+      ? "답변 평가 중…"
+      : phase === "generating"
+        ? "다음 질문 준비 중…"
+        : isLast
+          ? "마무리하고 리포트"
+          : "답변 제출";
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-4 py-12 sm:px-6 sm:py-16">
@@ -93,7 +110,7 @@ export default function InterviewPage() {
           묶음 {Math.min(bundleCount + 1, MOCK_QUESTIONS.length)} · 질문{" "}
           {currentIdx + 1}
         </p>
-        {canReport && !isLast && (
+        {canReport && !isLast && phase === "asking" && (
           <Button
             variant="outline"
             size="sm"
@@ -117,50 +134,89 @@ export default function InterviewPage() {
         />
       </div>
 
-      {/* Question card */}
+      {/* Question or Loading card */}
       <AnimatePresence mode="wait">
-        <motion.div
-          key={question.id}
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -16 }}
-          transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-          className="flex flex-col gap-5 rounded-2xl border border-border/60 bg-card p-6 sm:p-8"
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-accent/30 bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent">
-              {question.category}
-            </span>
-            {question.isFollowup && (
-              <span className="rounded-full border border-warning/30 bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning">
-                꼬리질문
+        {phase === "asking" ? (
+          <motion.div
+            key={`q-${question.id}`}
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -16 }}
+            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            className="flex flex-col gap-5 rounded-2xl border border-border/60 bg-card p-6 sm:p-8"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-accent/30 bg-accent/10 px-2.5 py-0.5 text-xs font-medium text-accent">
+                {question.category}
               </span>
-            )}
-          </div>
-          <p className="text-xl font-medium leading-relaxed sm:text-2xl">
-            {question.text}
-          </p>
-        </motion.div>
+              {question.isFollowup && (
+                <span className="rounded-full border border-warning/30 bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning">
+                  꼬리질문
+                </span>
+              )}
+            </div>
+            <p className="text-xl font-medium leading-relaxed sm:text-2xl">
+              {question.text}
+            </p>
+          </motion.div>
+        ) : (
+          <motion.div
+            key={`loading-${phase}`}
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -16 }}
+            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card p-6 sm:p-8"
+          >
+            <div className="flex items-center gap-3">
+              {phase === "evaluating" ? (
+                <Loader2 className="size-5 animate-spin text-accent" />
+              ) : (
+                <motion.div
+                  animate={{ rotate: [0, 12, -8, 0], scale: [1, 1.1, 1] }}
+                  transition={{ duration: 1.6, repeat: Infinity }}
+                  className="text-accent"
+                >
+                  <Sparkles className="size-5" />
+                </motion.div>
+              )}
+              <h3 className="text-lg font-medium">
+                {phase === "evaluating"
+                  ? "답변을 평가하고 있어요"
+                  : "다음 질문을 준비 중이에요"}
+              </h3>
+            </div>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              {phase === "evaluating"
+                ? "STAR 구조 · 구체성 · 직무 관련성 · 일관성 네 축으로 답변을 살펴보고 있습니다."
+                : "답변에서 더 깊이 파고들 지점을 찾아 다음 질문을 만들고 있어요."}
+            </p>
+          </motion.div>
+        )}
       </AnimatePresence>
 
-      {/* Answer */}
-      <div className="flex flex-col gap-3">
+      {/* Answer form — phase 에 따라 페이드 */}
+      <motion.div
+        animate={{
+          opacity: phase === "asking" ? 1 : 0.4,
+        }}
+        transition={{ duration: 0.3 }}
+        className={
+          phase !== "asking"
+            ? "pointer-events-none flex flex-col gap-3"
+            : "flex flex-col gap-3"
+        }
+      >
         <Textarea
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
           placeholder="구체적인 사례·수치·역할을 포함해 답변해주세요. STAR(상황·과제·행동·결과) 흐름이면 더 좋습니다."
           rows={6}
           className="min-h-[160px] resize-y"
-          disabled={submitting}
+          disabled={phase !== "asking"}
         />
         <div className="flex items-center justify-between gap-3">
-          <p
-            className={
-              ansLen >= MIN_ANSWER_LENGTH
-                ? "text-xs text-muted-foreground"
-                : "text-xs text-muted-foreground"
-            }
-          >
+          <p className="text-xs text-muted-foreground">
             {ansLen}자 / 최소 {MIN_ANSWER_LENGTH}자
           </p>
           <Button
@@ -169,11 +225,11 @@ export default function InterviewPage() {
             size="lg"
             className="rounded-full px-6 transition-transform hover:scale-105 disabled:hover:scale-100"
           >
-            {submitting ? "평가 중…" : isLast ? "마무리하고 리포트" : "답변 제출"}
-            <Send className="ml-1 size-4" />
+            {buttonLabel}
+            {phase === "asking" && <Send className="ml-1 size-4" />}
           </Button>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
