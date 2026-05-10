@@ -1,4 +1,19 @@
 from models.types import (
     Category,
-    # types에 넣을 dataClass들 추가해야함
+    CompanyProfile,
+    EvaluationResult,
+    Question,
+    Report,
+    SessionContext,
+    SessionState,
 )
+
+__all__ = [
+    "Category",
+    "CompanyProfile",
+    "EvaluationResult",
+    "Question",
+    "Report",
+    "SessionContext",
+    "SessionState",
+]

@@ -1,3 +1,6 @@
+# Claude Code
+docs/superpowers/
+
 # Created by https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,visualstudiocode
 
@@ -187,6 +190,7 @@ Thumbs.db
 # Chroma DB
 chroma_db/
 *.db
+_test_chroma/
 
 # Local History for Visual Studio Code
 .history/
@@ -199,4 +203,11 @@ chroma_db/
 .history
 .ionide
 
+# Cache
+cache/
+
+# temporary docs
+docs/plandocs.md
+docs/test/
+.claude
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
